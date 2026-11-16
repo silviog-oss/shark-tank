@@ -1,0 +1,96 @@
+rules_version = '2';
+
+// 🦈 Shark Tank — Firestore security rules
+// These rules ARE the anti-cherry-pick + no-duplicate guarantee:
+//   • Agents can never list or read waiting tickets — only tickets they've already claimed.
+//   • An agent can only claim the ticket at the front of the line (meta/counter.next),
+//     and claiming it + advancing the line must happen in the same atomic write.
+//   • Two agents racing for the same slot: Firestore lets exactly one transaction win.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ====== EDIT THESE (keep in sync with website/config.js) ======
+    function adminEmails() {
+      return ['silvio.g@incfile.com', 'i.lopez@bizee.com'];
+    }
+    function companyAccount() {
+      return request.auth.token.email.matches('^[^@]+@(bizee|incfile)[.]com$');
+    }
+    // ===============================================================
+
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && companyAccount();
+    }
+    function me() { return request.auth.token.email; }
+    function isAdmin() { return signedIn() && me() in adminEmails(); }
+
+    function counterPath() { return /databases/$(database)/documents/meta/counter; }
+    function settingsPath() { return /databases/$(database)/documents/meta/settings; }
+    function slot(n) { return /databases/$(database)/documents/queue/$(string(n)); }
+    function notPaused() {
+      return !exists(settingsPath()) || get(settingsPath()).data.get('paused', false) != true;
+    }
+
+    // { paused: bool }
+    match /meta/settings {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // { next: int  (front of the line), tail: int (where the next added ticket goes) }
+    match /meta/counter {
+      allow read: if signedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || agentStep();
+
+      function agentStep() {
+        let n = resource.data.next;
+        return signedIn() && notPaused()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['next'])
+          && request.resource.data.next == n + 1
+          && n < resource.data.tail
+          && exists(slot(n))
+          && (
+            // a) claiming: the same write marks slot n as claimed by me
+            (get(slot(n)).data.status == 'waiting'
+              && getAfter(slot(n)).data.status == 'claimed'
+              && getAfter(slot(n)).data.claimedBy == me())
+            // b) stepping over a slot an admin removed
+            || get(slot(n)).data.status != 'waiting'
+          );
+      }
+    }
+
+    // queue/{seq}: { seq, ticketId, leadType, status: waiting|claimed|skipped|removed,
+    //               addedBy, addedAt, claimedBy, claimedByName, claimedAt, claimedDay, result, resultAt }
+    match /queue/{seq} {
+      allow read: if isAdmin() || (signedIn() && resource.data.claimedBy == request.auth.token.email);
+      allow create: if isAdmin();
+      allow delete: if false; // never delete — admins mark "removed" so the line never breaks
+      allow update: if isAdmin() || agentClaim() || agentReport();
+
+      function agentClaim() {
+        return signedIn() && notPaused()
+          && resource.data.status == 'waiting'
+          && int(seq) == get(counterPath()).data.next
+          && getAfter(counterPath()).data.next == int(seq) + 1
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'claimedBy', 'claimedByName', 'claimedAt', 'claimedDay'])
+          && request.resource.data.status == 'claimed'
+          && request.resource.data.claimedBy == me()
+          && request.resource.data.claimedAt == request.time;
+      }
+
+      // The claimer reports what happened in Zendesk (assigned / skipped because solved, etc.)
+      function agentReport() {
+        return signedIn()
+          && resource.data.get('claimedBy', '') == me()
+          && resource.data.status == 'claimed'
+          && request.resource.data.status in ['claimed', 'skipped']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'result', 'resultAt']);
+      }
+    }
+  }
+}

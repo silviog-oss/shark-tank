@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shark Tank</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦈</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="fin">🦈</span> Shark Tank</div>
+    <nav id="nav" class="nav hidden">
+      <button class="navbtn active" data-view="agent">Grab</button>
+      <button class="navbtn admin-only hidden" data-view="admin">Admin</button>
+    </nav>
+    <div id="userchip" class="userchip hidden">
+      <img id="avatar" alt="" />
+      <span id="username"></span>
+      <button id="signout" class="link">Sign out</button>
+    </div>
+  </header>
+
+  <!-- LOGIN -->
+  <main id="view-login" class="view center">
+    <div class="card login">
+      <div class="big-fin">🦈</div>
+      <h1>Shark Tank</h1>
+      <p class="muted">Sign in with your company Google account to grab tickets.</p>
+      <button id="signin" class="btn primary lg">Sign in with Google</button>
+      <p id="login-error" class="error"></p>
+    </div>
+  </main>
+
+  <!-- AGENT -->
+  <main id="view-agent" class="view hidden">
+    <section class="card grab-card">
+      <div id="paused-banner" class="banner warn hidden">⏸ The Shark Tank is paused by an admin.</div>
+      <div class="tank-count"><span id="count">–</span><small>tickets in the tank</small></div>
+      <button id="grab" class="btn primary xl">🦈 Grab next ticket</button>
+      <p id="grab-status" class="muted status"></p>
+      <div id="ticket-card" class="ticket hidden"></div>
+      <div id="ext-pill" class="pill"></div>
+    </section>
+
+    <section class="card">
+      <h2>My claims today</h2>
+      <table class="table">
+        <thead><tr><th>Ticket</th><th>Lead type</th><th>Claimed</th><th>Result</th></tr></thead>
+        <tbody id="my-claims"><tr><td colspan="4" class="muted">None yet.</td></tr></tbody>
+      </table>
+    </section>
+  </main>
+
+  <!-- ADMIN -->
+  <main id="view-admin" class="view hidden">
+    <div class="tabs">
+      <button class="tab active" data-tab="queue">Queue <span id="q-badge" class="badge">0</span></button>
+      <button class="tab" data-tab="log">History</button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </div>
+
+    <section id="tab-queue" class="tabpane">
+      <div class="card">
+        <h2>Add tickets</h2>
+        <p class="muted">One per line, added to the <b>bottom</b> of the line. Ticket ID, #ID or Zendesk URL. Optional lead type after a comma or tab: <code>12345, Mail Order</code></p>
+        <textarea id="add-input" rows="5" placeholder="12345, Mail Order&#10;#12346, Retention&#10;https://bizee.zendesk.com/agent/tickets/12347"></textarea>
+        <div class="row">
+          <select id="add-type">
+            <option value="">Lead type for lines without one…</option>
+            <option>Mail Order</option><option>MISC</option><option>Retention</option>
+          </select>
+          <button id="add-btn" class="btn primary">Add to tank</button>
+          <span id="add-status" class="muted"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row between">
+          <h2>Waiting in line</h2>
+          <span class="muted">Top = next out. Agents can't see this list.</span>
+        </div>
+        <table class="table">
+          <thead><tr><th>#</th><th>Ticket</th><th>Lead type</th><th>Added by</th><th>Added</th><th></th></tr></thead>
+          <tbody id="queue-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="tab-log" class="tabpane hidden">
+      <div class="card">
+        <div class="row between">
+          <h2>History: who took which ticket</h2>
+          <div class="row">
+            <select id="log-agent"><option value="">All agents</option></select>
+            <select id="log-range"><option value="today">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="all">All</option></select>
+            <input id="log-search" placeholder="Search ticket / agent…" />
+            <button id="export" class="btn">Export CSV</button>
+          </div>
+        </div>
+        <div id="stats" class="stats"></div>
+        <table class="table">
+          <thead><tr><th>When</th><th>Ticket</th><th>Lead type</th><th>Taken by</th><th>Status</th><th>Result</th><th></th></tr></thead>
+          <tbody id="log-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="tab-settings" class="tabpane hidden">
+      <div class="card">
+        <h2>Settings</h2>
+        <label class="toggle"><input type="checkbox" id="pause-toggle" /> <span>Pause the Shark Tank (agents can't grab)</span></label>
+        <p class="muted">Admins: <span id="admin-list"></span>. To change admins, edit <code>config.js</code> and <code>firestore.rules</code>.</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
