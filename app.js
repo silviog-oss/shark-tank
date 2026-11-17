@@ -49,7 +49,11 @@ window.addEventListener('message', (e) => {
 });
 window.postMessage({ source: 'sharktank-web', type: 'hello?' }, location.origin);
 
-function ext(payload, timeoutMs = 60000) {
+const WORKER = new URLSearchParams(location.search).get('worker') === '1'; // opened hidden by the extension
+const waitForExt = async (ms = 2500) => { const end = Date.now() + ms; while (!extReady && Date.now() < end) await new Promise((r) => setTimeout(r, 100)); return extReady; };
+
+async function ext(payload, timeoutMs = 60000) {
+  await waitForExt();
   return new Promise((resolve) => {
     if (!extReady) return resolve(null);
     const id = ++msgId;
@@ -62,7 +66,7 @@ function renderExt() {
   const p = $('#ext-pill');
   p.classList.toggle('on', extReady);
   p.textContent = extReady
-    ? `✓ Zendesk helper connected${extVersion ? ' v' + extVersion : ''} — tickets are auto-assigned to you`
+    ? `✓ Zendesk helper connected${extVersion ? ' v' + extVersion : ''} — tip: use the 🦈 Grab ticket button inside Zendesk`
     : 'Zendesk helper extension not detected — you\'ll get a link and assign it to yourself';
 }
 setTimeout(renderExt, 800);
@@ -72,14 +76,25 @@ $('#signin').onclick = async () => {
   $('#login-error').textContent = '';
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account', ...(ALLOWED_DOMAINS.length === 1 ? { hd: ALLOWED_DOMAINS[0] } : {}) });
-  try { await signInWithPopup(auth, provider); } catch (e) { $('#login-error').textContent = e.message; }
+  try { await signInWithPopup(auth, provider); } catch (e) {
+    const msgs = {
+      'auth/popup-blocked': `Chrome blocked the sign-in window. Click the blocked-popup icon at the right of the address bar → "Always allow pop-ups from ${location.hostname}", then try again.`,
+      'auth/popup-closed-by-user': 'The sign-in window was closed before finishing — try again.',
+      'auth/cancelled-popup-request': '',
+      'auth/unauthorized-domain': `This site (${location.hostname}) isn't authorized in Firebase yet — an admin needs to add it under Authentication → Settings → Authorized domains.`,
+      'auth/invalid-api-key': 'The Firebase API key in config.js is wrong — an admin needs to fix it.',
+    };
+    $('#login-error').textContent = e.code in msgs ? msgs[e.code] : e.message;
+  }
 };
 $('#signout').onclick = () => signOut(auth);
 
 onAuthStateChanged(auth, async (u) => {
   unsubs.forEach((f) => f()); unsubs = [];
   if (!u) {
-    me = null; $('#nav').classList.add('hidden'); $('#userchip').classList.add('hidden'); show('login'); return;
+    me = null; $('#nav').classList.add('hidden'); $('#userchip').classList.add('hidden'); show('login');
+    if (WORKER) { $('#login-error').textContent = 'Sign in once and your ticket will open in Zendesk automatically.'; ext({ type: 'needLogin' }); }
+    return;
   }
   const email = (u.email || '').toLowerCase();
   if (!ALLOWED_DOMAINS.includes(email.split('@')[1])) {
@@ -122,9 +137,9 @@ function startAgent() {
       : '<tr><td colspan="4" class="muted">None yet.</td></tr>';
   }, (e) => console.error(e)));
 
-  if (new URLSearchParams(location.search).get('grab') === '1') {
-    window.history.replaceState(null, '', location.pathname);
-    setTimeout(grab, 900); // give the extension a moment to say hello
+  if (WORKER) {
+    $('#grab-status').textContent = 'Working… this tab closes by itself.';
+    setTimeout(grab, 300);
   }
 }
 
@@ -132,7 +147,7 @@ function showTicket(t, kind, msg) {
   const card = $('#ticket-card');
   card.className = 'ticket ' + (kind === 'assigned' ? 'ok' : 'warn');
   const line = {
-    assigned: '✅ Assigned to you in Zendesk and opened in your Zendesk tab.',
+    assigned: '✅ Opened in your Zendesk tab and assigned to you (submit the ticket to save it).',
     link: '🔗 Open it and assign it to yourself.',
     failed: `⚠️ Couldn't auto-assign (${esc(msg)}). Open it and assign it to yourself.`,
   }[kind];
@@ -144,51 +159,63 @@ function showTicket(t, kind, msg) {
 
 let grabbing = false;
 async function grab() {
-  if (grabbing || paused) return;
+  if (grabbing) return;
   grabbing = true;
   const btn = $('#grab'); btn.disabled = true;
   const status = $('#grab-status');
+  const say = (text) => { status.textContent = text; };
+  let outcome = { ok: false, text: 'Something went wrong.' };
   $('#ticket-card').classList.add('hidden');
   $('#ticket-card').innerHTML = '';
-  status.textContent = 'Grabbing…';
+  say('Grabbing…');
   try {
+    if (paused) { outcome = { ok: false, text: '⏸ The Shark Tank is paused by an admin.' }; say(outcome.text); return; }
     for (let i = 0; i < 10; i++) {
       const seq = await Q.claimOne(me);
-      if (seq == null) { status.textContent = 'The tank is empty right now 🌊 — try again in a bit.'; return; }
+      if (seq == null) { outcome = { ok: false, text: 'The tank is empty right now 🌊 — try again in a bit.' }; say(outcome.text); return; }
       const t = await Q.getSlot(seq);
 
-      if (!extReady) {
+      if (!(await waitForExt())) {
         await Q.report(seq, { result: 'link only (no extension)' });
-        status.textContent = 'You got one!';
+        say('You got one!');
         showTicket(t, 'link');
         window.open(ticketUrl(t.ticketId), '_blank');
+        outcome = { ok: true, text: `🦈 You got #${t.ticketId}` };
         return;
       }
 
-      status.textContent = `Assigning #${t.ticketId} in Zendesk…`;
+      say(`Opening #${t.ticketId} in Zendesk…`);
       const r = await ext({ type: 'assign', host: ZENDESK_HOST, ticketId: t.ticketId, note: `🦈 Claimed from the Shark Tank by ${me.name}` });
       if (r?.ok) {
-        await Q.report(seq, { result: 'assigned' });
-        status.textContent = 'You got one!';
+        await Q.report(seq, { result: `assigned (${r.method || 'ok'})` });
+        say('You got one!');
         showTicket(t, 'assigned');
+        outcome = { ok: true, text: r.method === 'take it'
+          ? `🦈 You got #${t.ticketId} — "take it" clicked. Submit the ticket to save the assignment.`
+          : `🦈 You got #${t.ticketId} — assigned to you.` };
         return;
       }
       if (r?.skip) {
         await Q.report(seq, { status: 'skipped', result: `skipped: ${r.reason}` });
-        status.textContent = `#${t.ticketId} was ${r.reason} — grabbing the next one…`;
+        say(`#${t.ticketId} was ${r.reason} — grabbing the next one…`);
+        ext({ type: 'status', text: `#${t.ticketId} was ${r.reason} — grabbing the next one…` });
         continue;
       }
       await Q.report(seq, { result: `assign failed: ${r?.error || 'unknown'}` });
-      status.textContent = 'You got one — but it needs a manual assign.';
+      say('You got one — but it needs a manual assign.');
       showTicket(t, 'failed', r?.error || 'unknown error');
+      outcome = { ok: false, text: `🦈 You got #${t.ticketId}, but: ${r?.error || 'unknown error'}. Assign it to yourself.` };
       return;
     }
-    status.textContent = 'Several tickets in a row were already handled — tell an admin to check the queue.';
+    outcome = { ok: false, text: 'Several tickets in a row were already handled — tell an admin to check the queue.' };
+    say(outcome.text);
   } catch (e) {
     console.error(e);
-    status.textContent = e.code === 'paused' ? 'The Shark Tank is paused.' : `Error: ${e.message}`;
+    outcome = { ok: false, text: e.code === 'paused' ? '⏸ The Shark Tank is paused.' : `Error: ${e.message}` };
+    say(outcome.text);
   } finally {
     grabbing = false; btn.disabled = paused; $('#ticket-card').classList.toggle('hidden', !$('#ticket-card').innerHTML);
+    if (WORKER) ext({ type: 'done', ...outcome });
   }
 }
 $('#grab').onclick = grab;

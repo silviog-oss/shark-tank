@@ -17,4 +17,4 @@ export const ADMINS = ["silvio.g@incfile.com", "i.lopez@bizee.com"];
 export const ALLOWED_DOMAINS = ["bizee.com", "incfile.com"];
 
 // Your Zendesk agent domain
-export const ZENDESK_HOST = "bizee.zendesk.com";
+export const ZENDESK_HOST = "incfile.zendesk.com";
